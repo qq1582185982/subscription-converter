@@ -1,0 +1,46 @@
+# 可执行文件
+*.exe
+subscription-converter-linux
+subscription-converter
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 配置文件（运行时生成）
+admin_config.json
+subscription_*.txt
+
+# Go 编译产物
+*.so
+*.dylib
+
+# 临时文件
+*.tmp
+*.temp
+
+# 日志文件
+*.log
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 测试文件
+test_*
+*_test.go
+
+# 临时目录
+temp/
+tmp/ 
