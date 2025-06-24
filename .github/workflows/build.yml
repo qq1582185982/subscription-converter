@@ -47,7 +47,7 @@ jobs:
         go-version: '1.21'
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/go/pkg/mod
         key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -68,7 +68,7 @@ jobs:
           -o dist/subscription-converter-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} .
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: subscription-converter-${{ matrix.os }}-${{ matrix.arch }}
         path: dist/subscription-converter-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
@@ -84,7 +84,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: dist
 
@@ -134,7 +134,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push Docker image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: .
         push: true
