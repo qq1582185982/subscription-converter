@@ -1,5 +1,6 @@
 # 可执行文件
 *.exe
+*.exe~
 subscription-converter-linux
 subscription-converter
 
