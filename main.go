@@ -150,20 +150,48 @@ func trojanToURI(proxy ProxyConfig) string {
 func convertClashToSubscription(clashConfig ClashConfig) (string, int) {
 	var subscriptionLines []string
 	
-	for _, proxy := range clashConfig.Proxies {
+	log.Printf("开始转换 %d 个代理节点", len(clashConfig.Proxies))
+	
+	for i, proxy := range clashConfig.Proxies {
 		var uri string
+		log.Printf("处理节点 %d: 类型=%s, 名称=%s", i+1, proxy.Type, proxy.Name)
+		
 		switch proxy.Type {
 		case "ss":
 			uri = ssToURI(proxy)
+			log.Printf("生成SS URI: %s", func() string {
+				if len(uri) > 100 {
+					return uri[:100] + "..."
+				}
+				return uri
+			}())
 		case "vmess":
 			uri = vmessToURI(proxy)
+			log.Printf("生成VMess URI: %s", func() string {
+				if len(uri) > 100 {
+					return uri[:100] + "..."
+				}
+				return uri
+			}())
 		case "trojan":
 			uri = trojanToURI(proxy)
+			log.Printf("生成Trojan URI: %s", func() string {
+				if len(uri) > 100 {
+					return uri[:100] + "..."
+				}
+				return uri
+			}())
 		default:
+			log.Printf("跳过不支持的节点类型: %s", proxy.Type)
 			continue
 		}
-		subscriptionLines = append(subscriptionLines, uri)
+		
+		if uri != "" {
+			subscriptionLines = append(subscriptionLines, uri)
+		}
 	}
+	
+	log.Printf("成功转换 %d 个节点", len(subscriptionLines))
 	
 	content := strings.Join(subscriptionLines, "\n")
 	subscriptionB64 := base64.StdEncoding.EncodeToString([]byte(content))
@@ -706,12 +734,28 @@ func convertHandler(w http.ResponseWriter, r *http.Request) {
 	// 解析YAML配置
 	var clashConfig ClashConfig
 	if err := yaml.Unmarshal([]byte(configContent), &clashConfig); err != nil {
+		log.Printf("YAML解析失败: %v", err)
+		log.Printf("配置内容前500字符: %s", func() string {
+			if len(configContent) > 500 {
+				return configContent[:500]
+			}
+			return configContent
+		}())
 		response := ConvertResponse{
 			Success: false,
 			Message: fmt.Sprintf("配置文件格式错误: %v", err),
 		}
 		sendJSONResponse(w, response)
 		return
+	}
+	
+	log.Printf("成功解析YAML配置，找到 %d 个代理节点", len(clashConfig.Proxies))
+	for i, proxy := range clashConfig.Proxies {
+		log.Printf("节点 %d: 类型=%s, 名称=%s, 服务器=%s", i+1, proxy.Type, proxy.Name, proxy.Server)
+		if i >= 5 { // 只显示前5个节点
+			log.Printf("... 还有 %d 个节点", len(clashConfig.Proxies)-5)
+			break
+		}
 	}
 	
 	// 生成配置哈希用于去重检查
