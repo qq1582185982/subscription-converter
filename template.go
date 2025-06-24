@@ -43,6 +43,38 @@ func getIndexTemplate() string {
             -webkit-text-fill-color: transparent;
         }
         
+        .header-with-btn {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .admin-btn {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            transition: transform 0.2s ease;
+            display: inline-block;
+            white-space: nowrap;
+            line-height: normal;
+            text-align: center;
+            vertical-align: middle;
+            min-width: 80px;
+        }
+        
+        .admin-btn:hover {
+            transform: translateY(-2px);
+            text-decoration: none;
+            color: white;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+        }
+        
         .form-group {
             margin-bottom: 25px;
         }
@@ -193,40 +225,13 @@ func getIndexTemplate() string {
         .config-input.active {
             display: block;
         }
-        
-        .info-box {
-            background: #e3f2fd;
-            border: 1px solid #2196f3;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 30px;
-            text-align: center;
-        }
-        
-        .info-box h3 {
-            color: #1976d2;
-            margin-bottom: 10px;
-        }
-        
-        .info-box p {
-            color: #424242;
-            line-height: 1.5;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚀 订阅转换工具 (Go版)</h1>
-        
-        <div class="info-box">
-            <h3>✨ 独立可执行文件版本</h3>
-            <p>无需Python环境，直接运行！支持Windows、Linux、macOS跨平台部署</p>
-            <br>
-            <h3>🔄 新功能特性</h3>
-            <p>• 智能去重：相同配置复用订阅链接，避免重复</p>
-            <p>• URL配置实时更新（访问时自动检查最新内容）</p>
-            <p>• 支持多个不同配置同时管理</p>
-            <p>• <a href="/login" style="color: #667eea; text-decoration: none; font-weight: bold;">🔐 管理后台</a> - 查看所有订阅记录</p>
+        <div class="header-with-btn">
+            <h1>🚀 订阅转换工具</h1>
+            <a href="/login" class="admin-btn">管理后台</a>
         </div>
         
         <form id="convertForm">

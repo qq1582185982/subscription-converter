@@ -1,5 +1,10 @@
 # 订阅转换服务器 (Go版)
 
+[![Build Status](https://github.com/qq1582185982/subscription-converter/workflows/Build%20Multi-Platform%20Releases/badge.svg)](https://github.com/qq1582185982/subscription-converter/actions)
+[![Release](https://img.shields.io/github/v/release/qq1582185982/subscription-converter)](https://github.com/qq1582185982/subscription-converter/releases)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/qq1582185982/subscription-converter/pkgs/container/subscription-converter)
+[![Go Report Card](https://goreportcard.com/badge/github.com/qq1582185982/subscription-converter)](https://goreportcard.com/report/github.com/qq1582185982/subscription-converter)
+
 基于Go语言和SQLite数据库的高性能Clash配置转换服务器，支持将Clash YAML格式配置转换为通用的订阅链接格式。
 
 ## ✨ 功能特点
@@ -147,6 +152,30 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o subscription-converter-linu
 # Linux/Mac
 bash build.sh
 ```
+
+### GitHub Actions 自动构建
+
+本项目集成了 GitHub Actions，支持自动构建多平台版本：
+
+- **触发条件**: 推送代码、创建标签、提交PR
+- **支持平台**: Windows、Linux、macOS (x64/ARM64)  
+- **自动发布**: 创建标签时自动创建 GitHub Release
+- **Docker 镜像**: 自动构建并推送到 GitHub Container Registry
+
+**使用方法**:
+```bash
+# 创建新版本标签
+git tag v2.1.0
+git push origin v2.1.0
+
+# Actions 将自动:
+# 1. 构建所有平台版本
+# 2. 创建 GitHub Release
+# 3. 上传构建产物
+# 4. 构建 Docker 镜像
+```
+
+详细说明请参考: [README-ACTIONS.md](README-ACTIONS.md)
 
 ## 📡 API接口
 

@@ -43,4 +43,11 @@ test_*
 
 # 临时目录
 temp/
-tmp/ 
+tmp/
+
+# GitHub Actions 构建产物
+dist/
+
+# Docker 相关
+.dockerignore 
+userinput.py
