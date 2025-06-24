@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+
 	"gopkg.in/yaml.v3"
 )
 
