@@ -1,10 +1,10 @@
 module subscription-converter
 
-go 1.19
+go 1.21
 
 require (
-	github.com/glebarez/go-sqlite v1.22.0
 	gopkg.in/yaml.v3 v3.0.1
+	github.com/mattn/go-sqlite3 v1.14.24
 )
 
 require (

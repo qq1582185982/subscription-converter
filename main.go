@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
+	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -266,7 +266,7 @@ func findExistingConfig(configHash string) *SubscriptionConfig {
 // 初始化数据库
 func initDatabase() error {
 	var err error
-	db, err = sql.Open("sqlite", "subscription.db")
+	db, err = sql.Open("sqlite3", "subscription.db")
 	if err != nil {
 		return fmt.Errorf("打开数据库失败: %v", err)
 	}

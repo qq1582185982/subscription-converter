@@ -59,11 +59,22 @@ jobs:
         go mod tidy
         go mod download
 
+    - name: Install build dependencies
+      if: matrix.os == 'windows'
+      run: |
+        if [ "${{ matrix.arch }}" = "amd64" ]; then
+          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+          echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+        elif [ "${{ matrix.arch }}" = "386" ]; then
+          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686  
+          echo "CC=i686-w64-mingw32-gcc" >> $GITHUB_ENV
+        fi
+
     - name: Build binary
       env:
         GOOS: ${{ matrix.os }}
         GOARCH: ${{ matrix.arch }}
-        CGO_ENABLED: 0
+        CGO_ENABLED: 1
       run: |
         mkdir -p dist
         go build -ldflags "-s -w -X main.version=${GITHUB_REF#refs/tags/}" \
