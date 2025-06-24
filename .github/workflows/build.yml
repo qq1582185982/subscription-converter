@@ -54,8 +54,10 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
-      run: go mod download
+    - name: Tidy and download dependencies
+      run: |
+        go mod tidy
+        go mod download
 
     - name: Build binary
       env:
