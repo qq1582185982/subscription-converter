@@ -1,27 +1,14 @@
-name: Build Multi-Platform Releases
+name: Build Releases
 
 on:
   push:
-    branches: [ main, master ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # 定义需要编译的平台
-        include:
-          - os: windows
-            arch: amd64
-            ext: .exe
-          - os: linux
-            arch: amd64
-            ext: ""
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -31,60 +18,30 @@ jobs:
       with:
         go-version: '1.21'
 
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-
-    - name: Tidy and download dependencies
-      run: |
-        go mod tidy
-        go mod download
-
-    - name: Build binary
+    - name: Build Windows
       env:
-        GOOS: ${{ matrix.os }}
-        GOARCH: ${{ matrix.arch }}
+        GOOS: windows
+        GOARCH: amd64
         CGO_ENABLED: 0
       run: |
-        mkdir -p dist
-        go build -ldflags "-s -w -X main.version=${GITHUB_REF#refs/tags/}" \
-          -o dist/subscription-converter-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} .
+        go mod tidy
+        go build -ldflags "-s -w" -o subscription-converter-windows-amd64.exe .
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: subscription-converter-${{ matrix.os }}-${{ matrix.arch }}
-        path: dist/subscription-converter-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+    - name: Build Linux
+      env:
+        GOOS: linux
+        GOARCH: amd64
+        CGO_ENABLED: 0
+      run: |
+        go build -ldflags "-s -w" -o subscription-converter-linux-amd64 .
 
-  # 创建发布版本（仅在有标签时运行）
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: write
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: dist
-
-    - name: Display structure of downloaded files
-      run: ls -la dist/
-
-    - name: Create release
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/*/subscription-converter-*
+          subscription-converter-windows-amd64.exe
+          subscription-converter-linux-amd64
         generate_release_notes: true
         draft: false
         prerelease: false
