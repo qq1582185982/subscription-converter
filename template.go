@@ -236,6 +236,20 @@ func getIndexTemplate() string {
         
         <form id="convertForm">
             <div class="form-group">
+                <label>转换方向：</label>
+                <div class="input-type-selector">
+                    <div class="radio-group">
+                        <input type="radio" id="to_subscription" name="convert_direction" value="to_subscription" checked>
+                        <label for="to_subscription">转为通用订阅</label>
+                    </div>
+                    <div class="radio-group">
+                        <input type="radio" id="to_clash" name="convert_direction" value="to_clash">
+                        <label for="to_clash">转为Clash配置</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label>配置文件来源：</label>
                 <div class="input-type-selector">
                     <div class="radio-group">
@@ -248,22 +262,22 @@ func getIndexTemplate() string {
                     </div>
                 </div>
             </div>
-            
+
             <div class="config-input active" id="url_input">
                 <div class="form-group">
-                    <label for="config_url">Clash 配置文件 URL：</label>
-                    <input type="url" id="config_url" name="config_url" placeholder="https://example.com/config.yaml">
+                    <label for="config_url" id="url_label">配置文件/订阅 URL：</label>
+                    <input type="url" id="config_url" name="config_url" placeholder="https://example.com/config.yaml 或订阅链接">
                 </div>
             </div>
-            
+
             <div class="config-input" id="text_input">
                 <div class="form-group">
-                    <label for="config_text">Clash 配置文件内容：</label>
-                    <textarea id="config_text" name="config_text" placeholder="请粘贴完整的 Clash YAML 配置文件内容..."></textarea>
+                    <label for="config_text" id="text_label">配置文件/订阅内容：</label>
+                    <textarea id="config_text" name="config_text" placeholder="请粘贴 Clash YAML 配置、订阅内容或Base64编码的订阅..."></textarea>
                 </div>
             </div>
-            
-            <button type="submit" id="convertBtn">🎯 生成订阅链接</button>
+
+            <button type="submit" id="convertBtn">🎯 开始转换</button>
         </form>
         
         <div class="loading" id="loading">
@@ -286,28 +300,56 @@ func getIndexTemplate() string {
                 document.getElementById(this.value + '_input').classList.add('active');
             });
         });
-        
+
+        // 切换转换方向
+        document.querySelectorAll('input[name="convert_direction"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                const urlLabel = document.getElementById('url_label');
+                const textLabel = document.getElementById('text_label');
+                const urlInput = document.getElementById('config_url');
+                const textInput = document.getElementById('config_text');
+                const convertBtn = document.getElementById('convertBtn');
+
+                if (this.value === 'to_subscription') {
+                    urlLabel.textContent = '配置文件/订阅 URL：';
+                    textLabel.textContent = '配置文件/订阅内容：';
+                    urlInput.placeholder = 'https://example.com/config.yaml 或订阅链接';
+                    textInput.placeholder = '请粘贴 Clash YAML 配置、订阅内容或Base64编码的订阅...';
+                    convertBtn.textContent = '🎯 生成订阅链接';
+                } else {
+                    urlLabel.textContent = '订阅链接 URL：';
+                    textLabel.textContent = '订阅内容：';
+                    urlInput.placeholder = 'https://example.com/subscription 或机场订阅链接';
+                    textInput.placeholder = '请粘贴订阅内容或Base64编码的订阅...';
+                    convertBtn.textContent = '🔄 转为Clash配置';
+                }
+            });
+        });
+
         // 表单提交
         document.getElementById('convertForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+
             const formData = new FormData(this);
             const data = Object.fromEntries(formData.entries());
-            
+
             // 显示加载状态
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             document.getElementById('convertBtn').disabled = true;
-            
+
+            // 选择API端点
+            const apiEndpoint = data.convert_direction === 'to_clash' ? '/api/to-clash' : '/api/convert';
+
             try {
-                const response = await fetch('/api/convert', {
+                const response = await fetch(apiEndpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify(data)
                 });
-                
+
                 const result = await response.json();
                 
                 // 隐藏加载状态
@@ -320,28 +362,57 @@ func getIndexTemplate() string {
                 
                 if (result.success) {
                     resultDiv.className = 'result success';
+                    const convertDirection = document.querySelector('input[name="convert_direction"]:checked').value;
                     const isAutoUpdate = document.querySelector('input[name="config_source"]:checked').value === 'url';
-                    resultContent.innerHTML = ` + "`" + `
-                        <h3>✅ ${result.message}</h3>
-                        <div class="stats">
-                            <span>节点数量: ${result.proxy_count}</span>
-                            <span>订阅ID: ${result.subscription_id}</span>
-                            <span>生成时间: ${new Date().toLocaleString()}</span>
-                        </div>
-                        <div class="subscription-url">
-                            <strong>订阅链接：</strong><br>
-                            <span id="sub-url">${result.subscription_url}</span>
-                            <button class="copy-btn" onclick="copyToClipboard('sub-url')">📋 复制链接</button>
-                        </div>
-                        ${isAutoUpdate ? '<div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 10px; margin: 10px 0; color: #856404;"><strong>🔄 实时更新：</strong> 此订阅链接每次访问时都会检查并获取最新内容</div>' : ''}
-                        <p><strong>使用说明：</strong></p>
-                        <ul>
-                            <li>将上面的订阅链接复制到你的代理客户端中</li>
-                            <li>支持 PassWall、V2rayN、Clash 等客户端</li>
-                            <li>每个配置都有独立的订阅链接，不会相互干扰</li>
-                            ${isAutoUpdate ? '<li>URL来源的配置会实时更新，每次访问都获取最新节点</li>' : '<li>文本输入的配置不会自动更新</li>'}
-                        </ul>
-                    ` + "`" + `;
+
+                    if (convertDirection === 'to_clash') {
+                        // 反向转换结果显示
+                        resultContent.innerHTML = ` + "`" + `
+                            <h3>✅ ${result.message}</h3>
+                            <div class="stats">
+                                <span>节点数量: ${result.proxy_count}</span>
+                                <span>配置ID: ${result.clash_id}</span>
+                                <span>生成时间: ${new Date().toLocaleString()}</span>
+                            </div>
+                            <div class="subscription-url">
+                                <strong>Clash配置链接：</strong><br>
+                                <span id="clash-url">${result.clash_url}</span>
+                                <button class="copy-btn" onclick="copyToClipboard('clash-url')">📋 复制链接</button>
+                            </div>
+                            ${isAutoUpdate ? '<div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 10px; margin: 10px 0; color: #856404;"><strong>🔄 实时更新：</strong> 此配置链接每次访问时都会检查并获取最新内容</div>' : ''}
+                            <p><strong>使用说明：</strong></p>
+                            <ul>
+                                <li>将上面的配置链接复制到 Clash 客户端中</li>
+                                <li>支持 Clash for Windows、ClashX、ClashA 等客户端</li>
+                                <li>可以直接作为订阅链接使用，无需手动下载</li>
+                                <li>配置包含完整的代理组和规则设置</li>
+                                ${isAutoUpdate ? '<li>URL来源的配置会实时更新，每次访问都获取最新节点</li>' : '<li>文本输入的配置不会自动更新</li>'}
+                            </ul>
+                        ` + "`" + `;
+                    } else {
+                        // 原有的订阅转换结果显示
+                        resultContent.innerHTML = ` + "`" + `
+                            <h3>✅ ${result.message}</h3>
+                            <div class="stats">
+                                <span>节点数量: ${result.proxy_count}</span>
+                                <span>订阅ID: ${result.subscription_id}</span>
+                                <span>生成时间: ${new Date().toLocaleString()}</span>
+                            </div>
+                            <div class="subscription-url">
+                                <strong>订阅链接：</strong><br>
+                                <span id="sub-url">${result.subscription_url}</span>
+                                <button class="copy-btn" onclick="copyToClipboard('sub-url')">📋 复制链接</button>
+                            </div>
+                            ${isAutoUpdate ? '<div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 10px; margin: 10px 0; color: #856404;"><strong>🔄 实时更新：</strong> 此订阅链接每次访问时都会检查并获取最新内容</div>' : ''}
+                            <p><strong>使用说明：</strong></p>
+                            <ul>
+                                <li>将上面的订阅链接复制到你的代理客户端中</li>
+                                <li>支持 PassWall、V2rayN、Clash 等客户端</li>
+                                <li>每个配置都有独立的订阅链接，不会相互干扰</li>
+                                ${isAutoUpdate ? '<li>URL来源的配置会实时更新，每次访问都获取最新节点</li>' : '<li>文本输入的配置不会自动更新</li>'}
+                            </ul>
+                        ` + "`" + `;
+                    }
                 } else {
                     resultDiv.className = 'result error';
                     resultContent.innerHTML = ` + "`" + `
@@ -371,8 +442,8 @@ func getIndexTemplate() string {
         // 复制到剪贴板
         function copyToClipboard(elementId) {
             const element = document.getElementById(elementId);
-            const text = element.textContent;
-            
+            const text = element.textContent || element.value;
+
             navigator.clipboard.writeText(text).then(function() {
                 alert('已复制到剪贴板！');
             }).catch(function() {
@@ -385,6 +456,23 @@ func getIndexTemplate() string {
                 document.body.removeChild(textArea);
                 alert('已复制到剪贴板！');
             });
+        }
+
+        // 下载配置文件
+        function downloadConfig(filename) {
+            const element = document.getElementById('clash-config');
+            const text = element.value;
+
+            const blob = new Blob([text], { type: 'text/yaml;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
     </script>
 </body>

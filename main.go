@@ -35,12 +35,13 @@ type ProxyConfig struct {
 	Name     string `yaml:"name"`
 	Server   string `yaml:"server"`
 	Port     int    `yaml:"port"`
-	Password string `yaml:"password"`
+	Password string `yaml:"password,omitempty"`
 	Cipher   string `yaml:"cipher"`
-	UUID     string `yaml:"uuid"`
+	UUID     string `yaml:"uuid,omitempty"`
 	AlterID  int    `yaml:"alterId"`
-	Network  string `yaml:"network"`
-	TLS      bool   `yaml:"tls"`
+	Network  string `yaml:"network,omitempty"`
+	TLS      bool   `yaml:"tls,omitempty"`
+	Security string `yaml:"security,omitempty"`
 }
 
 // Clash配置结构
@@ -63,6 +64,35 @@ type ConvertResponse struct {
 	SubscriptionID    string `json:"subscription_id,omitempty"`
 	ProxyCount        int    `json:"proxy_count,omitempty"`
 	SubscriptionContent string `json:"subscription_content,omitempty"`
+}
+
+// 反向转换请求结构（订阅转Clash）
+type ToClashRequest struct {
+	ConfigSource string `json:"config_source"`
+	ConfigURL    string `json:"config_url"`
+	ConfigText   string `json:"config_text"`
+}
+
+// 反向转换响应结构
+type ToClashResponse struct {
+	Success     bool   `json:"success"`
+	Message     string `json:"message"`
+	ClashURL    string `json:"clash_url,omitempty"`
+	ClashID     string `json:"clash_id,omitempty"`
+	ProxyCount  int    `json:"proxy_count,omitempty"`
+}
+
+// Clash配置存储结构
+type ClashConfigData struct {
+	ID           string    `json:"id"`
+	ConfigHash   string    `json:"config_hash"`   // 配置哈希用于去重
+	SourceURL    string    `json:"source_url,omitempty"`
+	SourceContent string   `json:"source_content,omitempty"`
+	ClashConfig  string    `json:"clash_config"`  // 完整的Clash YAML配置
+	ProxyCount   int       `json:"proxy_count"`
+	CreateTime   time.Time `json:"create_time"`
+	LastUpdate   time.Time `json:"last_update"`
+	IsAutoUpdate bool      `json:"is_auto_update"`
 }
 
 // 订阅配置结构
@@ -97,6 +127,9 @@ var (
 	subscriptions = make(map[string]*SubscriptionConfig)      // subscriptionID -> config
 	configHashMap = make(map[string]string)                   // configHash -> subscriptionID
 	subscriptionsMux sync.RWMutex
+	clashConfigs = make(map[string]*ClashConfigData)          // clashID -> config
+	clashConfigHashMap = make(map[string]string)              // configHash -> clashID
+	clashConfigsMux sync.RWMutex
 	adminConfig = &AdminConfig{}
 	adminMux sync.RWMutex
 	activeSessions = make(map[string]time.Time) // sessionToken -> expireTime
@@ -144,6 +177,19 @@ func vmessToURI(proxy ProxyConfig) string {
 func trojanToURI(proxy ProxyConfig) string {
 	name := url.QueryEscape(proxy.Name)
 	return fmt.Sprintf("trojan://%s@%s:%d#%s", proxy.Password, proxy.Server, proxy.Port, name)
+}
+
+// 解析Clash YAML配置，提取代理列表
+func parseClashYAML(content string) ([]ProxyConfig, error) {
+	log.Printf("开始解析Clash YAML配置，内容长度: %d", len(content))
+
+	var clashConfig ClashConfig
+	if err := yaml.Unmarshal([]byte(content), &clashConfig); err != nil {
+		return nil, fmt.Errorf("解析Clash YAML失败: %v", err)
+	}
+
+	log.Printf("从Clash配置中提取到 %d 个代理节点", len(clashConfig.Proxies))
+	return clashConfig.Proxies, nil
 }
 
 // 解析Base64编码的订阅内容
@@ -302,6 +348,14 @@ func parseVMessURI(uri string) (ProxyConfig, error) {
 	proxy.AlterID = getInt(vmessConfig, "aid")
 	proxy.Network = getString(vmessConfig, "net")
 	proxy.TLS = getString(vmessConfig, "tls") == "tls"
+	proxy.Cipher = "auto" // VMess默认cipher值
+
+	// 设置security字段，默认为none
+	security := getString(vmessConfig, "scy")
+	if security == "" {
+		security = "none"
+	}
+	proxy.Security = security
 
 	if proxy.Name == "" {
 		proxy.Name = fmt.Sprintf("%s:%d", proxy.Server, proxy.Port)
@@ -505,9 +559,11 @@ func downloadConfigFromURL(configURL string) (string, error) {
 func detectContentType(content string) string {
 	content = strings.TrimSpace(content)
 
-	// 检查是否为Base64编码的订阅
-	if isBase64Subscription(content) {
-		return "subscription"
+	// 首先检查是否为YAML格式的Clash配置
+	if strings.Contains(content, "proxies:") ||
+	   strings.Contains(content, "proxy-groups:") ||
+	   strings.Contains(content, "rules:") {
+		return "clash"
 	}
 
 	// 检查是否包含URI格式的代理
@@ -517,11 +573,9 @@ func detectContentType(content string) string {
 		return "subscription"
 	}
 
-	// 检查是否为YAML格式的Clash配置
-	if strings.Contains(content, "proxies:") ||
-	   strings.Contains(content, "proxy-groups:") ||
-	   strings.Contains(content, "rules:") {
-		return "clash"
+	// 最后检查是否为Base64编码的订阅
+	if isBase64Subscription(content) {
+		return "subscription"
 	}
 
 	return "unknown"
@@ -549,10 +603,25 @@ func isBase64Subscription(content string) bool {
 func convertSubscriptionToClash(content string) (string, error) {
 	log.Printf("开始解析订阅内容，内容长度: %d", len(content))
 
-	// 解析订阅内容获取代理配置
-	proxies, err := parseSubscriptionContent(content)
-	if err != nil {
-		return "", fmt.Errorf("解析订阅内容失败: %v", err)
+	// 检测内容类型
+	contentType := detectContentType(content)
+	log.Printf("检测到内容类型: %s", contentType)
+
+	var proxies []ProxyConfig
+	var err error
+
+	if contentType == "clash" {
+		// 已经是Clash配置，直接解析YAML
+		proxies, err = parseClashYAML(content)
+		if err != nil {
+			return "", fmt.Errorf("解析Clash YAML失败: %v", err)
+		}
+	} else {
+		// 是订阅内容，需要解析URI
+		proxies, err = parseSubscriptionContent(content)
+		if err != nil {
+			return "", fmt.Errorf("解析订阅内容失败: %v", err)
+		}
 	}
 
 	if len(proxies) == 0 {
@@ -573,6 +642,152 @@ func convertSubscriptionToClash(content string) (string, error) {
 	}
 
 	return string(yamlData), nil
+}
+
+// 完整的Clash配置结构
+type FullClashConfig struct {
+	Port               int                    `yaml:"port"`
+	SocksPort          int                    `yaml:"socks-port"`
+	RedirPort          int                    `yaml:"redir-port,omitempty"`
+	MixedPort          int                    `yaml:"mixed-port,omitempty"`
+	AllowLan           bool                   `yaml:"allow-lan"`
+	Mode               string                 `yaml:"mode"`
+	LogLevel           string                 `yaml:"log-level"`
+	ExternalController string                 `yaml:"external-controller"`
+	DNS                map[string]interface{} `yaml:"dns"`
+	Proxies            []ProxyConfig          `yaml:"proxies"`
+	ProxyGroups        []ProxyGroup           `yaml:"proxy-groups"`
+	Rules              []string               `yaml:"rules"`
+}
+
+// 代理组结构
+type ProxyGroup struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"`
+	Proxies []string `yaml:"proxies"`
+	URL     string   `yaml:"url,omitempty"`
+	Interval int     `yaml:"interval,omitempty"`
+}
+
+// 生成完整的Clash配置（订阅转Clash）
+func generateFullClashConfig(content string) (string, int, error) {
+	log.Printf("开始生成完整Clash配置，内容长度: %d", len(content))
+
+	// 检测内容类型
+	contentType := detectContentType(content)
+	log.Printf("检测到内容类型: %s", contentType)
+
+	var proxies []ProxyConfig
+	var err error
+
+	if contentType == "clash" {
+		// 已经是Clash配置，直接解析YAML
+		proxies, err = parseClashYAML(content)
+		if err != nil {
+			return "", 0, fmt.Errorf("解析Clash YAML失败: %v", err)
+		}
+	} else {
+		// 是订阅内容，需要解析URI
+		proxies, err = parseSubscriptionContent(content)
+		if err != nil {
+			return "", 0, fmt.Errorf("解析订阅内容失败: %v", err)
+		}
+	}
+
+	if len(proxies) == 0 {
+		return "", 0, fmt.Errorf("未找到任何有效的代理配置")
+	}
+
+	log.Printf("成功解析 %d 个代理节点", len(proxies))
+
+	// 生成代理名称列表
+	var proxyNames []string
+	for _, proxy := range proxies {
+		proxyNames = append(proxyNames, proxy.Name)
+	}
+
+	// 构造完整的Clash配置
+	fullConfig := FullClashConfig{
+		Port:               7890,
+		SocksPort:          7891,
+		MixedPort:          7892,
+		AllowLan:           false,
+		Mode:               "Rule",
+		LogLevel:           "info",
+		ExternalController: "127.0.0.1:9090",
+		DNS: map[string]interface{}{
+			"enable":            true,
+			"ipv6":              false,
+			"default-nameserver": []string{"223.5.5.5", "119.29.29.29"},
+			"enhanced-mode":     "fake-ip",
+			"fake-ip-range":     "198.18.0.1/16",
+			"nameserver": []string{
+				"https://doh.pub/dns-query",
+				"https://dns.alidns.com/dns-query",
+			},
+			"fallback": []string{
+				"https://cloudflare-dns.com/dns-query",
+				"https://dns.google/dns-query",
+			},
+		},
+		Proxies: proxies,
+		ProxyGroups: []ProxyGroup{
+			{
+				Name:     "🔰 节点选择",
+				Type:     "select",
+				Proxies:  append([]string{"♻️ 自动选择", "🎯 全球直连"}, proxyNames...),
+			},
+			{
+				Name:     "♻️ 自动选择",
+				Type:     "url-test",
+				Proxies:  proxyNames,
+				URL:      "http://www.gstatic.com/generate_204",
+				Interval: 300,
+			},
+			{
+				Name:    "🎯 全球直连",
+				Type:    "select",
+				Proxies: []string{"DIRECT"},
+			},
+			{
+				Name:    "🛑 全球拦截",
+				Type:    "select",
+				Proxies: []string{"REJECT"},
+			},
+			{
+				Name:    "🐟 漏网之鱼",
+				Type:    "select",
+				Proxies: []string{"🔰 节点选择", "🎯 全球直连"},
+			},
+		},
+		Rules: []string{
+			// 去广告规则
+			"RULE-SET,reject,🛑 全球拦截",
+			// 国内直连规则
+			"RULE-SET,china,🎯 全球直连",
+			"RULE-SET,cncidr,🎯 全球直连",
+			// 国外代理规则
+			"RULE-SET,proxy,🔰 节点选择",
+			"RULE-SET,telegramcidr,🔰 节点选择",
+			// 本地局域网直连
+			"IP-CIDR,127.0.0.0/8,🎯 全球直连",
+			"IP-CIDR,172.16.0.0/12,🎯 全球直连",
+			"IP-CIDR,192.168.0.0/16,🎯 全球直连",
+			"IP-CIDR,10.0.0.0/8,🎯 全球直连",
+			// GeoIP 规则
+			"GEOIP,CN,🎯 全球直连",
+			// 漏网之鱼
+			"MATCH,🐟 漏网之鱼",
+		},
+	}
+
+	// 将配置转换为YAML格式
+	yamlData, err := yaml.Marshal(&fullConfig)
+	if err != nil {
+		return "", 0, fmt.Errorf("生成Clash配置失败: %v", err)
+	}
+
+	return string(yamlData), len(proxies), nil
 }
 
 // 生成随机订阅ID
@@ -1245,6 +1460,192 @@ func convertHandler(w http.ResponseWriter, r *http.Request) {
 	sendJSONResponse(w, response)
 }
 
+// 反向转换处理器（订阅转Clash）
+func toClashHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ToClashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response := ToClashResponse{
+			Success: false,
+			Message: "请求格式错误",
+		}
+		sendToClashResponse(w, response)
+		return
+	}
+
+	var configContent string
+	var err error
+
+	switch req.ConfigSource {
+	case "url":
+		if req.ConfigURL == "" {
+			response := ToClashResponse{
+				Success: false,
+				Message: "请输入订阅链接URL",
+			}
+			sendToClashResponse(w, response)
+			return
+		}
+		configContent, err = downloadConfigFromURL(req.ConfigURL)
+		if err != nil {
+			response := ToClashResponse{
+				Success: false,
+				Message: fmt.Sprintf("下载订阅内容失败: %v", err),
+			}
+			sendToClashResponse(w, response)
+			return
+		}
+	case "text":
+		if req.ConfigText == "" {
+			response := ToClashResponse{
+				Success: false,
+				Message: "请输入订阅内容",
+			}
+			sendToClashResponse(w, response)
+			return
+		}
+		configContent = req.ConfigText
+	default:
+		response := ToClashResponse{
+			Success: false,
+			Message: "无效的配置源类型",
+		}
+		sendToClashResponse(w, response)
+		return
+	}
+
+	// 检测内容类型并处理
+	contentType := detectContentType(configContent)
+	log.Printf("反向转换检测到内容类型: %s", contentType)
+
+	var clashConfig string
+	var proxyCount int
+
+	if contentType == "clash" {
+		// 如果已经是Clash配置，直接使用
+		log.Printf("内容已经是Clash配置，直接使用")
+		clashConfig = configContent
+
+		// 尝试解析节点数量
+		var clashConfigStruct ClashConfig
+		if yaml.Unmarshal([]byte(configContent), &clashConfigStruct) == nil {
+			proxyCount = len(clashConfigStruct.Proxies)
+			log.Printf("解析到 %d 个代理节点", proxyCount)
+		} else {
+			log.Printf("无法解析Clash配置中的节点数量")
+		}
+	} else {
+		// 作为订阅内容处理，生成完整Clash配置
+		log.Printf("作为订阅内容处理")
+		var err error
+		clashConfig, proxyCount, err = generateFullClashConfig(configContent)
+		if err != nil {
+			response := ToClashResponse{
+				Success: false,
+				Message: fmt.Sprintf("生成Clash配置失败: %v", err),
+			}
+			sendToClashResponse(w, response)
+			return
+		}
+	}
+
+	// 生成配置哈希用于去重检查
+	configHash := generateConfigHash(req.ConfigSource, req.ConfigURL, req.ConfigText)
+
+	// 检查是否已存在相同配置
+	clashConfigsMux.RLock()
+	if existingClashID, exists := clashConfigHashMap[configHash]; exists {
+		if existingConfig, exists := clashConfigs[existingClashID]; exists {
+			clashConfigsMux.RUnlock()
+
+			// 如果是URL配置，更新一下内容以确保是最新的
+			if existingConfig.IsAutoUpdate {
+				go func() {
+					if err := updateClashConfig(existingConfig); err != nil {
+						log.Printf("更新已存在Clash配置 %s 失败: %v", existingConfig.ID, err)
+					}
+				}()
+			}
+
+			// 生成Clash配置链接
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			clashURL := fmt.Sprintf("%s://%s/clash-config/%s.yaml", scheme, r.Host, existingConfig.ID)
+
+			response := ToClashResponse{
+				Success: true,
+				Message: fmt.Sprintf("找到已存在的配置！节点数量: %d，配置ID: %s", existingConfig.ProxyCount, existingConfig.ID),
+				ClashURL: clashURL,
+				ClashID:  existingConfig.ID,
+				ProxyCount: existingConfig.ProxyCount,
+			}
+
+			sendToClashResponse(w, response)
+			return
+		}
+	}
+	clashConfigsMux.RUnlock()
+
+	// 生成随机Clash配置ID
+	clashID := generateSubscriptionID()
+
+	// 创建Clash配置数据
+	now := time.Now()
+	config := &ClashConfigData{
+		ID:           clashID,
+		ConfigHash:   configHash,
+		ClashConfig:  clashConfig,
+		ProxyCount:   proxyCount,
+		CreateTime:   now,
+		LastUpdate:   now,
+		IsAutoUpdate: req.ConfigSource == "url", // 只有URL来源才自动更新
+	}
+
+	if req.ConfigSource == "url" {
+		config.SourceURL = req.ConfigURL
+	} else {
+		config.SourceContent = req.ConfigText
+	}
+
+	// 保存Clash配置到内存
+	clashConfigsMux.Lock()
+	clashConfigs[clashID] = config
+	clashConfigHashMap[configHash] = clashID
+	clashConfigsMux.Unlock()
+
+	log.Printf("创建新Clash配置: ID=%s, 节点数量=%d", clashID, proxyCount)
+
+	// 生成Clash配置链接
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	clashURL := fmt.Sprintf("%s://%s/clash-config/%s.yaml", scheme, r.Host, clashID)
+
+	response := ToClashResponse{
+		Success:    true,
+		Message:    fmt.Sprintf("转换成功！生成包含 %d 个节点的Clash配置", proxyCount),
+		ClashURL:   clashURL,
+		ClashID:    clashID,
+		ProxyCount: proxyCount,
+	}
+
+	sendToClashResponse(w, response)
+}
+
+// 发送反向转换响应
+func sendToClashResponse(w http.ResponseWriter, response ToClashResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(response)
+}
+
 // 订阅链接处理器
 func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	// 解析URL路径，获取订阅ID
@@ -1305,6 +1706,109 @@ func subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Last-Modified", config.LastUpdate.Format(time.RFC1123))
 	w.Write([]byte(config.Content))
+}
+
+// Clash配置文件处理器
+func clashConfigHandler(w http.ResponseWriter, r *http.Request) {
+	// 解析URL路径，获取配置ID
+	path := strings.TrimPrefix(r.URL.Path, "/clash-config/")
+	if path == "" || path == "/" {
+		http.Error(w, "Clash配置ID不能为空", http.StatusBadRequest)
+		return
+	}
+
+	// 提取文件名（移除.yaml后缀）
+	clashID := strings.TrimSuffix(path, ".yaml")
+	if clashID == path {
+		// 如果没有.yaml后缀，也尝试处理
+		clashID = path
+	}
+
+	log.Printf("请求Clash配置ID: %s", clashID)
+
+	clashConfigsMux.RLock()
+	config, exists := clashConfigs[clashID]
+	clashConfigsMux.RUnlock()
+
+	if !exists {
+		log.Printf("Clash配置不存在: %s", clashID)
+		http.Error(w, "Clash配置不存在", http.StatusNotFound)
+		return
+	}
+
+	// 如果是自动更新的配置，检查是否需要更新
+	if config.IsAutoUpdate && config.SourceURL != "" {
+		go func() {
+			if err := updateClashConfig(config); err != nil {
+				log.Printf("更新Clash配置 %s 失败: %v", clashID, err)
+			} else {
+				log.Printf("Clash配置 %s 已实时更新，节点数量: %d", clashID, config.ProxyCount)
+			}
+		}()
+	}
+
+	// 设置响应头
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"clash-%s.yaml\"", clashID))
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	log.Printf("返回Clash配置: %s，节点数量: %d", clashID, config.ProxyCount)
+
+	// 返回配置内容
+	w.Write([]byte(config.ClashConfig))
+}
+
+// 更新Clash配置内容
+func updateClashConfig(config *ClashConfigData) error {
+	var configContent string
+	var err error
+
+	if config.SourceURL != "" {
+		// 从URL下载最新配置
+		configContent, err = downloadConfigFromURL(config.SourceURL)
+		if err != nil {
+			return fmt.Errorf("下载配置失败: %v", err)
+		}
+	} else {
+		// 使用存储的内容
+		configContent = config.SourceContent
+	}
+
+	// 检测内容类型
+	contentType := detectContentType(configContent)
+	log.Printf("更新Clash配置 %s，检测到内容类型: %s", config.ID, contentType)
+
+	var clashConfig string
+	var proxyCount int
+
+	if contentType == "clash" {
+		// 已经是Clash配置，直接使用
+		clashConfig = configContent
+
+		// 解析并计算节点数量
+		var clashObj ClashConfig
+		if err := yaml.Unmarshal([]byte(configContent), &clashObj); err == nil {
+			proxyCount = len(clashObj.Proxies)
+		}
+		log.Printf("使用现有Clash配置，节点数量: %d", proxyCount)
+	} else {
+		// 是订阅内容，需要转换为Clash配置
+		clashConfig, proxyCount, err = generateFullClashConfig(configContent)
+		if err != nil {
+			return fmt.Errorf("生成Clash配置失败: %v", err)
+		}
+		log.Printf("从订阅生成Clash配置，节点数量: %d", proxyCount)
+	}
+
+	// 更新配置
+	clashConfigsMux.Lock()
+	config.ClashConfig = clashConfig
+	config.ProxyCount = proxyCount
+	config.LastUpdate = time.Now()
+	clashConfigsMux.Unlock()
+
+	log.Printf("Clash配置 %s 更新成功，节点数量: %d", config.ID, proxyCount)
+	return nil
 }
 
 // 首次设置处理器
@@ -1563,9 +2067,11 @@ func main() {
 	http.HandleFunc("/admin", adminHandler)
 	http.HandleFunc("/logout", logoutHandler)
 	http.HandleFunc("/api/convert", convertHandler)
+	http.HandleFunc("/api/to-clash", toClashHandler)
 	http.HandleFunc("/api/subscriptions", subscriptionListHandler)
 	http.HandleFunc("/subscription", subscriptionHandler)
 	http.HandleFunc("/subscription/", subscriptionHandler) // 支持订阅ID路径
+	http.HandleFunc("/clash-config/", clashConfigHandler)   // 支持Clash配置访问
 	
 	// 获取本机IP
 	localIP := getLocalIP()
