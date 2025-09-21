@@ -146,6 +146,250 @@ func trojanToURI(proxy ProxyConfig) string {
 	return fmt.Sprintf("trojan://%s@%s:%d#%s", proxy.Password, proxy.Server, proxy.Port, name)
 }
 
+// 解析Base64编码的订阅内容
+func parseSubscriptionContent(content string) ([]ProxyConfig, error) {
+	// 尝试Base64解码
+	decoded, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		// 如果不是Base64编码，直接使用原内容
+		decoded = []byte(content)
+	}
+
+	lines := strings.Split(string(decoded), "\n")
+	var proxies []ProxyConfig
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var proxy ProxyConfig
+		var err error
+
+		if strings.HasPrefix(line, "ss://") {
+			proxy, err = parseSSURI(line)
+		} else if strings.HasPrefix(line, "vmess://") {
+			proxy, err = parseVMessURI(line)
+		} else if strings.HasPrefix(line, "trojan://") {
+			proxy, err = parseTrojanURI(line)
+		} else {
+			log.Printf("跳过不支持的协议: %s", line[:min(50, len(line))])
+			continue
+		}
+
+		if err != nil {
+			log.Printf("解析URI失败: %v, URI: %s", err, line[:min(100, len(line))])
+			continue
+		}
+
+		proxies = append(proxies, proxy)
+	}
+
+	return proxies, nil
+}
+
+// 解析SS URI格式 ss://method:password@server:port#name
+func parseSSURI(uri string) (ProxyConfig, error) {
+	var proxy ProxyConfig
+
+	// 移除 ss:// 前缀
+	uri = strings.TrimPrefix(uri, "ss://")
+
+	// 检查是否有fragment（节点名称）
+	parts := strings.Split(uri, "#")
+	if len(parts) == 2 {
+		name, _ := url.QueryUnescape(parts[1])
+		proxy.Name = name
+		uri = parts[0]
+	}
+
+	// 尝试解析Base64编码的部分
+	if !strings.Contains(uri, "@") {
+		// 添加必要的padding
+		switch len(uri) % 4 {
+		case 2:
+			uri += "=="
+		case 3:
+			uri += "="
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(uri)
+		if err != nil {
+			// 尝试URL安全的Base64解码
+			decoded, err = base64.URLEncoding.DecodeString(uri)
+			if err != nil {
+				return proxy, fmt.Errorf("无效的SS Base64编码: %v", err)
+			}
+		}
+		uri = string(decoded)
+	}
+
+	// 解析 method:password@server:port
+	atIndex := strings.LastIndex(uri, "@")
+	if atIndex == -1 {
+		return proxy, fmt.Errorf("无效的SS URI格式")
+	}
+
+	// 解析认证部分
+	auth := uri[:atIndex]
+	colonIndex := strings.Index(auth, ":")
+	if colonIndex == -1 {
+		return proxy, fmt.Errorf("无效的SS认证格式")
+	}
+
+	proxy.Type = "ss"
+	proxy.Cipher = auth[:colonIndex]
+	proxy.Password = auth[colonIndex+1:]
+
+	// 解析服务器地址部分
+	serverPart := uri[atIndex+1:]
+	lastColonIndex := strings.LastIndex(serverPart, ":")
+	if lastColonIndex == -1 {
+		return proxy, fmt.Errorf("无效的SS服务器格式")
+	}
+
+	proxy.Server = serverPart[:lastColonIndex]
+	port, err := strconv.Atoi(serverPart[lastColonIndex+1:])
+	if err != nil {
+		return proxy, fmt.Errorf("无效的端口号: %v", err)
+	}
+	proxy.Port = port
+
+	if proxy.Name == "" {
+		proxy.Name = fmt.Sprintf("%s:%d", proxy.Server, proxy.Port)
+	}
+
+	return proxy, nil
+}
+
+// 解析VMess URI格式
+func parseVMessURI(uri string) (ProxyConfig, error) {
+	var proxy ProxyConfig
+
+	// 移除 vmess:// 前缀
+	uri = strings.TrimPrefix(uri, "vmess://")
+
+	// 添加必要的padding
+	switch len(uri) % 4 {
+	case 2:
+		uri += "=="
+	case 3:
+		uri += "="
+	}
+
+	// Base64解码
+	decoded, err := base64.StdEncoding.DecodeString(uri)
+	if err != nil {
+		// 尝试URL安全的Base64解码
+		decoded, err = base64.URLEncoding.DecodeString(uri)
+		if err != nil {
+			return proxy, fmt.Errorf("无效的VMess Base64编码: %v", err)
+		}
+	}
+
+	// 解析JSON
+	var vmessConfig map[string]interface{}
+	if err := json.Unmarshal(decoded, &vmessConfig); err != nil {
+		return proxy, fmt.Errorf("无效的VMess JSON格式: %v", err)
+	}
+
+	proxy.Type = "vmess"
+	proxy.Name = getString(vmessConfig, "ps")
+	proxy.Server = getString(vmessConfig, "add")
+	proxy.Port = getInt(vmessConfig, "port")
+	proxy.UUID = getString(vmessConfig, "id")
+	proxy.AlterID = getInt(vmessConfig, "aid")
+	proxy.Network = getString(vmessConfig, "net")
+	proxy.TLS = getString(vmessConfig, "tls") == "tls"
+
+	if proxy.Name == "" {
+		proxy.Name = fmt.Sprintf("%s:%d", proxy.Server, proxy.Port)
+	}
+
+	return proxy, nil
+}
+
+// 解析Trojan URI格式 trojan://password@server:port#name
+func parseTrojanURI(uri string) (ProxyConfig, error) {
+	var proxy ProxyConfig
+
+	// 移除 trojan:// 前缀
+	uri = strings.TrimPrefix(uri, "trojan://")
+
+	// 检查是否有fragment（节点名称）
+	parts := strings.Split(uri, "#")
+	if len(parts) == 2 {
+		name, _ := url.QueryUnescape(parts[1])
+		proxy.Name = name
+		uri = parts[0]
+	}
+
+	// 解析 password@server:port
+	atIndex := strings.LastIndex(uri, "@")
+	if atIndex == -1 {
+		return proxy, fmt.Errorf("无效的Trojan URI格式")
+	}
+
+	proxy.Type = "trojan"
+	proxy.Password = uri[:atIndex]
+
+	// 解析服务器地址部分
+	serverPart := uri[atIndex+1:]
+	lastColonIndex := strings.LastIndex(serverPart, ":")
+	if lastColonIndex == -1 {
+		return proxy, fmt.Errorf("无效的Trojan服务器格式")
+	}
+
+	proxy.Server = serverPart[:lastColonIndex]
+	port, err := strconv.Atoi(serverPart[lastColonIndex+1:])
+	if err != nil {
+		return proxy, fmt.Errorf("无效的端口号: %v", err)
+	}
+	proxy.Port = port
+
+	if proxy.Name == "" {
+		proxy.Name = fmt.Sprintf("%s:%d", proxy.Server, proxy.Port)
+	}
+
+	return proxy, nil
+}
+
+// 辅助函数：从map中安全获取字符串
+func getString(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// 辅助函数：从map中安全获取整数
+func getInt(m map[string]interface{}, key string) int {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case int:
+			return v
+		case float64:
+			return int(v)
+		case string:
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+// 辅助函数：获取两个数的最小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // 转换Clash配置为订阅链接
 func convertClashToSubscription(clashConfig ClashConfig) (string, int) {
 	var subscriptionLines []string
@@ -199,7 +443,7 @@ func convertClashToSubscription(clashConfig ClashConfig) (string, int) {
 	return subscriptionB64, len(subscriptionLines)
 }
 
-// 从URL下载配置文件
+// 从URL下载配置文件，支持订阅链接和Clash配置
 func downloadConfigFromURL(configURL string) (string, error) {
 	// 创建HTTP客户端，跳过SSL验证
 	tr := &http.Transport{
@@ -209,30 +453,126 @@ func downloadConfigFromURL(configURL string) (string, error) {
 		Transport: tr,
 		Timeout:   30 * time.Second,
 	}
-	
+
 	req, err := http.NewRequest("GET", configURL, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP错误: %d", resp.StatusCode)
 	}
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
-	
-	return string(body), nil
+
+	content := string(body)
+
+	// 检测内容类型并处理
+	contentType := detectContentType(content)
+	log.Printf("检测到内容类型: %s", contentType)
+
+	switch contentType {
+	case "subscription":
+		// 如果是订阅链接内容，转换为Clash配置格式
+		return convertSubscriptionToClash(content)
+	case "clash":
+		// 如果是Clash配置，直接返回
+		return content, nil
+	default:
+		// 未知格式，尝试作为订阅处理
+		log.Printf("未知内容格式，尝试作为订阅处理")
+		converted, err := convertSubscriptionToClash(content)
+		if err != nil {
+			// 如果订阅解析失败，返回原内容（可能是其他格式的Clash配置）
+			return content, nil
+		}
+		return converted, nil
+	}
+}
+
+// 检测内容类型
+func detectContentType(content string) string {
+	content = strings.TrimSpace(content)
+
+	// 检查是否为Base64编码的订阅
+	if isBase64Subscription(content) {
+		return "subscription"
+	}
+
+	// 检查是否包含URI格式的代理
+	if strings.Contains(content, "ss://") ||
+	   strings.Contains(content, "vmess://") ||
+	   strings.Contains(content, "trojan://") {
+		return "subscription"
+	}
+
+	// 检查是否为YAML格式的Clash配置
+	if strings.Contains(content, "proxies:") ||
+	   strings.Contains(content, "proxy-groups:") ||
+	   strings.Contains(content, "rules:") {
+		return "clash"
+	}
+
+	return "unknown"
+}
+
+// 检查是否为Base64编码的订阅
+func isBase64Subscription(content string) bool {
+	// 移除换行符和空格
+	cleaned := strings.ReplaceAll(strings.ReplaceAll(content, "\n", ""), " ", "")
+
+	// 检查是否为有效的Base64编码
+	if _, err := base64.StdEncoding.DecodeString(cleaned); err != nil {
+		return false
+	}
+
+	// 解码并检查内容
+	decoded, _ := base64.StdEncoding.DecodeString(cleaned)
+	decodedStr := string(decoded)
+
+	// 检查解码后的内容是否包含代理URI
+	return strings.Contains(decodedStr, "://")
+}
+
+// 将订阅内容转换为Clash配置格式
+func convertSubscriptionToClash(content string) (string, error) {
+	log.Printf("开始解析订阅内容，内容长度: %d", len(content))
+
+	// 解析订阅内容获取代理配置
+	proxies, err := parseSubscriptionContent(content)
+	if err != nil {
+		return "", fmt.Errorf("解析订阅内容失败: %v", err)
+	}
+
+	if len(proxies) == 0 {
+		return "", fmt.Errorf("未找到任何有效的代理配置")
+	}
+
+	log.Printf("成功解析 %d 个代理节点", len(proxies))
+
+	// 构造Clash配置
+	clashConfig := ClashConfig{
+		Proxies: proxies,
+	}
+
+	// 将配置转换为YAML格式
+	yamlData, err := yaml.Marshal(&clashConfig)
+	if err != nil {
+		return "", fmt.Errorf("生成Clash配置失败: %v", err)
+	}
+
+	return string(yamlData), nil
 }
 
 // 生成随机订阅ID
@@ -721,7 +1061,26 @@ func convertHandler(w http.ResponseWriter, r *http.Request) {
 			sendJSONResponse(w, response)
 			return
 		}
-		configContent = req.ConfigText
+
+		// 检测文本内容类型并处理
+		contentType := detectContentType(req.ConfigText)
+		log.Printf("文本输入检测到内容类型: %s", contentType)
+
+		if contentType == "subscription" {
+			// 如果是订阅内容，转换为Clash配置
+			converted, err := convertSubscriptionToClash(req.ConfigText)
+			if err != nil {
+				response := ConvertResponse{
+					Success: false,
+					Message: fmt.Sprintf("解析订阅内容失败: %v", err),
+				}
+				sendJSONResponse(w, response)
+				return
+			}
+			configContent = converted
+		} else {
+			configContent = req.ConfigText
+		}
 	default:
 		response := ConvertResponse{
 			Success: false,
@@ -741,12 +1100,33 @@ func convertHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return configContent
 		}())
-		response := ConvertResponse{
-			Success: false,
-			Message: fmt.Sprintf("配置文件格式错误: %v", err),
+
+		// 如果YAML解析失败，尝试作为订阅内容处理
+		log.Printf("尝试将内容作为订阅链接处理")
+		converted, subscriptionErr := convertSubscriptionToClash(configContent)
+		if subscriptionErr != nil {
+			// 订阅解析也失败，返回原始YAML错误
+			response := ConvertResponse{
+				Success: false,
+				Message: fmt.Sprintf("配置文件格式错误 (YAML解析失败: %v, 订阅解析失败: %v)", err, subscriptionErr),
+			}
+			sendJSONResponse(w, response)
+			return
 		}
-		sendJSONResponse(w, response)
-		return
+
+		// 订阅解析成功，使用转换后的Clash配置
+		configContent = converted
+		log.Printf("成功将订阅内容转换为Clash配置")
+
+		// 重新解析转换后的YAML配置
+		if err := yaml.Unmarshal([]byte(configContent), &clashConfig); err != nil {
+			response := ConvertResponse{
+				Success: false,
+				Message: fmt.Sprintf("转换后的配置解析失败: %v", err),
+			}
+			sendJSONResponse(w, response)
+			return
+		}
 	}
 	
 	log.Printf("成功解析YAML配置，找到 %d 个代理节点", len(clashConfig.Proxies))
